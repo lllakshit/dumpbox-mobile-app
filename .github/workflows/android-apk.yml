@@ -1,0 +1,115 @@
+name: Android APK
+
+# Builds a release APK on every PR and push to main, and uploads it as a downloadable artifact
+# (Actions run → Artifacts → dumpbox-android). Tags like v1.2.0 also attach the APK to a GitHub release.
+#
+# Repository variables (Settings → Secrets and variables → Actions → Variables), public values:
+#   SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, API_BASE_URL
+# Repository secrets for a release signature (optional; without them the APK is signed with a debug key,
+# fine for testing, not for the Play Store):
+#   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: 3.44.0
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+      - name: Write build settings
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
+        run: |
+          jq -n --arg a "$SUPABASE_URL" --arg b "$SUPABASE_PUBLISHABLE_KEY" --arg c "$API_BASE_URL" \
+            '{SUPABASE_URL:$a, SUPABASE_PUBLISHABLE_KEY:$b, API_BASE_URL:$c}' > config/ci.json
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_PUBLISHABLE_KEY" ] || [ -z "$API_BASE_URL" ]; then
+            echo "::warning::Repository variables SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY / API_BASE_URL are not set. The APK will open a 'not configured' screen."
+            echo "CONFIGURED=no" >> "$GITHUB_ENV"
+          else
+            echo "CONFIGURED=yes" >> "$GITHUB_ENV"
+          fi
+
+      - name: Release signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > android/app/upload-keystore.jks
+            printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=upload-keystore.jks\n' "$STORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > android/key.properties
+            echo "SIGNING=release" >> "$GITHUB_ENV"
+          else
+            echo "::notice::No signing secrets; the APK is signed with a debug key (installable for testing)."
+            echo "SIGNING=debug" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build APK
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: *//; s/+.*//')
+          flutter build apk --release --dart-define-from-file=config/ci.json --build-name="$VERSION" --build-number="${{ github.run_number }}"
+          NAME="dumpbox-${VERSION}-${{ github.run_number }}-${GITHUB_SHA::7}-${SIGNING}.apk"
+          mkdir -p dist && cp build/app/outputs/flutter-apk/app-release.apk "dist/$NAME"
+          echo "APK_NAME=$NAME" >> "$GITHUB_ENV"
+          ls -la dist
+
+      - name: Check the APK
+        run: |
+          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt | sort -V | tail -1)
+          "$AAPT" dump badging "dist/$APK_NAME" | grep -E "^package:|^application-label:|uses-permission: name='android.permission.INTERNET'"
+          "$(dirname "$AAPT")/apksigner" verify --print-certs "dist/$APK_NAME" | head -3
+          {
+            echo "### APK"
+            echo "- File: \`$APK_NAME\` ($(du -h "dist/$APK_NAME" | cut -f1))"
+            echo "- Signing: $SIGNING"
+            echo "- Server settings: $CONFIGURED"
+            echo "- Download: this run → Artifacts → dumpbox-android"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dumpbox-android
+          path: dist/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Attach to release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" "dist/$APK_NAME" --title "DumpBox ${GITHUB_REF_NAME}" --generate-notes || gh release upload "${GITHUB_REF_NAME}" "dist/$APK_NAME" --clobber
