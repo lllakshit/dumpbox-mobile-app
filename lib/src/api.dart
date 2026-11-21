@@ -16,7 +16,8 @@ class ApiException implements Exception {
   bool get isOffline => status == 0;
 
   /// Errors worth retrying later (network, rate limit, server trouble). Others mean the request itself is wrong.
-  bool get isRetryable => status == 0 || status == 429 || status >= 500;
+  /// An expired session (401) is retried after the token refreshes, never dropped.
+  bool get isRetryable => status == 0 || status == 401 || status == 408 || status == 429 || status >= 500;
 
   @override
   String toString() => message;
