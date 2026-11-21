@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../api.dart';
+import '../config.dart';
 import '../local_store.dart';
 import '../sync_engine.dart';
 import 'file_urls.dart';
@@ -58,25 +59,30 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     if (!mounted || _userId != uid) return;
     setState(() => _engine = engine);
 
-    _channel = Supabase.instance.client
-        .channel('items:$uid')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'items',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'user_id', value: uid),
-          callback: (_) => engine.nudge(),
-        )
-        .onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public',
-          table: 'item_tombstones',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'user_id', value: uid),
-          callback: (_) => engine.nudge(),
-        )
-        .subscribe();
+    if (AppConfig.realtimeAvailable) {
+      _channel = Supabase.instance.client
+          .channel('items:$uid')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'items',
+            filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'user_id', value: uid),
+            callback: (_) => engine.nudge(),
+          )
+          .onPostgresChanges(
+            event: PostgresChangeEvent.insert,
+            schema: 'public',
+            table: 'item_tombstones',
+            filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'user_id', value: uid),
+            callback: (_) => engine.nudge(),
+          )
+          .subscribe();
+    }
     _netSub = Connectivity().onConnectivityChanged.listen((r) => engine.setOnline(!r.contains(ConnectivityResult.none)));
-    _periodic = Timer.periodic(const Duration(minutes: 1), (_) => engine.nudge());
+    // With realtime, a slow safety check; through the proxy, check every 20 s while the app is in front.
+    _periodic = Timer.periodic(AppConfig.realtimeAvailable ? const Duration(minutes: 1) : const Duration(seconds: 20), (_) {
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) engine.nudge();
+    });
     engine.nudge(Duration.zero);
   }
 
