@@ -50,7 +50,7 @@ Set these once in *Settings → Secrets and variables → Actions*:
 
 | Kind | Name | Value |
 |---|---|---|
-| Variable | `SUPABASE_URL` | `https://<ref>.supabase.co` |
+| Variable | `SUPABASE_URL` | `https://<app domain>/sb` (Supabase through our domain; some Indian networks block `*.supabase.co`). A direct `https://<ref>.supabase.co` also works and turns on realtime. |
 | Variable | `SUPABASE_PUBLISHABLE_KEY` | Supabase publishable key (safe to ship in the app) |
 | Variable | `API_BASE_URL` | The Vercel URL of the web app, e.g. `https://dumpbox.vercel.app` |
 | Secret (optional) | `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` | Release signing. Without them the APK is debug-signed: installs fine for testing, not for the Play Store. |
