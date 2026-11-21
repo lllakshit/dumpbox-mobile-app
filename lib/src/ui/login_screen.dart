@@ -29,7 +29,8 @@ class _LoginScreenState extends State<LoginScreen> {
       _error = null;
     });
     try {
-      await _auth.signInWithOtp(email: email, shouldCreateUser: true);
+      // The email's sign-in link opens the app (dumpbox://login-callback); a 6-digit code also works when the email shows one.
+      await _auth.signInWithOtp(email: email, shouldCreateUser: true, emailRedirectTo: 'dumpbox://login-callback');
       setState(() => _codeSent = true);
     } on AuthException catch (e) {
       setState(() => _error = e.statusCode == '429' ? 'Too many requests. Wait a minute and try again.' : e.message);
@@ -100,9 +101,9 @@ class _LoginScreenState extends State<LoginScreen> {
                       decoration: const InputDecoration(labelText: 'Email'),
                     ),
                     const SizedBox(height: 12),
-                    FilledButton(onPressed: _busy ? null : _send, child: Text(_busy ? 'Sending…' : 'Send sign-in code')),
+                    FilledButton(onPressed: _busy ? null : _send, child: Text(_busy ? 'Sending…' : 'Email me a sign-in link')),
                   ] else ...[
-                    Text('We sent a 6-digit code to ${_email.text.trim()}. It expires in 10 minutes.', style: TextStyle(color: c.onSurfaceVariant)),
+                    Text('Check ${_email.text.trim()}: tap the sign-in link on this phone, or type the 6-digit code if the email shows one. It expires in 10 minutes.', style: TextStyle(color: c.onSurfaceVariant)),
                     const SizedBox(height: 12),
                     TextField(
                       controller: _code,
