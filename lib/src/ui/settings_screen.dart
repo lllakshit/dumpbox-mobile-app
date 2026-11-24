@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../config.dart';
+import '../planner/planner_engine.dart';
+import '../planner/ui/planner_screen.dart';
 import '../sync_engine.dart';
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key, required this.engine, required this.email, required this.onSignOut});
+  const SettingsScreen({super.key, required this.engine, this.planner, required this.email, required this.onSignOut});
   final SyncEngine engine;
+  final PlannerEngine? planner;
   final String email;
   final Future<void> Function() onSignOut;
 
@@ -80,6 +83,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           ListTile(leading: const Icon(Icons.dns_outlined), title: const Text('Server'), subtitle: Text(AppConfig.apiBase)),
+          if (widget.planner != null) ...[const Divider(), PlannerSettingsSection(engine: widget.planner!)],
           const Divider(),
           ListTile(leading: const Icon(Icons.logout), title: const Text('Sign out'), subtitle: const Text('Removes the copy stored on this phone'), onTap: widget.onSignOut),
           ListTile(
