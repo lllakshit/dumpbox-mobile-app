@@ -17,7 +17,8 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "app.dumpbox.dumpbox"
-    compileSdk = flutter.compileSdkVersion
+    // The reminder plugin (flutter_local_notifications) and androidx.core 1.19 compile against Android 37.
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
