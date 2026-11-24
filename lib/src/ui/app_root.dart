@@ -7,9 +7,14 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:http/http.dart' as http;
+
 import '../api.dart';
 import '../config.dart';
 import '../local_store.dart';
+import '../planner/background.dart';
+import '../planner/notifications.dart';
+import '../planner/planner_engine.dart';
 import '../sync_engine.dart';
 import 'file_urls.dart';
 import 'home_shell.dart';
@@ -30,6 +35,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   RealtimeChannel? _channel;
   Timer? _periodic;
   SyncEngine? _engine;
+  PlannerEngine? _planner;
+  Timer? _rescheduleTimer;
   String? _userId;
 
   @override
@@ -56,8 +63,28 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     FileUrls.api = api;
     FileUrls.clear();
     await engine.init();
+
+    // Calendar and tasks: own database file, same API client; reminders are rescheduled after every change.
+    final plannerPath = p.join(docs.path, 'planner-$uid.db');
+    final planner = PlannerEngine(
+      store: await PlannerStore.open(plannerPath),
+      api: api,
+      onChanged: (pl) async {
+        _rescheduleTimer?.cancel();
+        _rescheduleTimer = Timer(const Duration(milliseconds: 800), () {
+          PlannerNotifications.instance.reschedule(pl.entries, pl.prefs).catchError((Object _) => 0);
+        });
+      },
+    )..onFeedReady = (url, dbPath) {
+        BackgroundConfig.save(feedUrl: url, dbPath: dbPath).then((_) => startBackgroundReminders()).catchError((Object e) => debugPrint('background reminders: $e'));
+      };
+    await planner.init();
     if (!mounted || _userId != uid) return;
-    setState(() => _engine = engine);
+    setState(() {
+      _engine = engine;
+      _planner = planner;
+    });
+    _startPlanner(planner, plannerPath);
 
     if (AppConfig.realtimeAvailable) {
       _channel = Supabase.instance.client
@@ -76,18 +103,61 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
             filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'user_id', value: uid),
             callback: (_) => engine.nudge(),
           )
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'planner_entries',
+            filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'user_id', value: uid),
+            callback: (_) => planner.nudge(),
+          )
           .subscribe();
     }
     _netSub = Connectivity().onConnectivityChanged.listen((r) => engine.setOnline(!r.contains(ConnectivityResult.none)));
     // With realtime, a slow safety check; through the proxy, check every 20 s while the app is in front.
     _periodic = Timer.periodic(AppConfig.realtimeAvailable ? const Duration(minutes: 1) : const Duration(seconds: 20), (_) {
-      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) engine.nudge();
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+        engine.nudge();
+        planner.nudge();
+      }
     });
     engine.nudge(Duration.zero);
   }
 
+  /// First sync, notification permission (asked once), and the background reminder check.
+  Future<void> _startPlanner(PlannerEngine planner, String dbPath) async {
+    try {
+      await PlannerNotifications.instance.init();
+      if (await planner.store.meta('asked_notifications') == null) {
+        await planner.store.setMeta('asked_notifications', '1');
+        await PlannerNotifications.instance.requestPermission();
+      }
+    } catch (e) {
+      debugPrint('notifications: $e');
+    }
+    await planner.sync();
+    try {
+      await planner.ensureBackgroundFeed(dbPath, check: (url) async {
+        try {
+          final r = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 20));
+          return r.statusCode != 404;
+        } catch (_) {
+          return true; // offline: keep it, check next time
+        }
+      });
+    } catch (e) {
+      debugPrint('background feed: $e');
+    }
+  }
+
   Future<void> _stopEngine() async {
     _periodic?.cancel();
+    _rescheduleTimer?.cancel();
+    final pl = _planner;
+    _planner = null;
+    if (pl != null) {
+      pl.dispose();
+      await pl.store.close();
+    }
     await _netSub?.cancel();
     if (_channel != null) await Supabase.instance.client.removeChannel(_channel!);
     _channel = null;
@@ -102,12 +172,19 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   Future<void> signOut() async {
     final e = _engine;
     if (e != null) await e.wipe();
+    final pl = _planner;
+    if (pl != null) await pl.wipe();
+    await stopBackgroundReminders();
+    await PlannerNotifications.instance.cancelAll();
     await _auth.signOut();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _engine?.nudge();
+    if (state == AppLifecycleState.resumed) {
+      _engine?.nudge();
+      _planner?.nudge();
+    }
   }
 
   @override
@@ -122,8 +199,9 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     if (_userId == null) return const LoginScreen();
     final engine = _engine;
-    if (engine == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    return HomeShell(engine: engine, email: _auth.currentUser?.email ?? '', onSignOut: signOut);
+    final planner = _planner;
+    if (engine == null || planner == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    return HomeShell(engine: engine, planner: planner, email: _auth.currentUser?.email ?? '', onSignOut: signOut);
   }
 }
 

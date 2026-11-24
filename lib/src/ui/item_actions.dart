@@ -4,12 +4,14 @@ import 'package:share_plus/share_plus.dart';
 
 import '../api.dart';
 import '../models.dart';
+import '../planner/ui/planner_screen.dart';
 import '../sync_engine.dart';
 
 /// Bottom sheet of actions for one item.
 Future<void> showItemActions(BuildContext context, SyncEngine engine, Item item) async {
   final messenger = ScaffoldMessenger.of(context);
   void snack(String m) => messenger.showSnackBar(SnackBar(content: Text(m)));
+  final planner = PlannerScope.maybeOf(context);
 
   final action = await showModalBottomSheet<String>(
     context: context,
@@ -36,6 +38,10 @@ Future<void> showItemActions(BuildContext context, SyncEngine engine, Item item)
                       tile('share', Icons.ios_share, 'Share link'),
                     ],
                     tile('copy', Icons.copy, 'Copy text'),
+                    if (planner != null) ...[
+                      tile('event', Icons.event, 'Make event…'),
+                      tile('task', Icons.add_task, 'Make task…'),
+                    ],
                     tile('archive', Icons.archive_outlined, item.isArchived ? 'Unarchive' : 'Archive'),
                     tile('trash', Icons.delete_outline, 'Move to trash', danger: true),
                   ],
@@ -83,6 +89,10 @@ Future<void> showItemActions(BuildContext context, SyncEngine engine, Item item)
     case 'share':
       if (!context.mounted) return;
       await _share(context, engine, item);
+    case 'event':
+    case 'task':
+      if (!context.mounted || planner == null) return;
+      await makeFromItem(context, planner, item, action);
   }
 }
 

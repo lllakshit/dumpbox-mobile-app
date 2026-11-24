@@ -17,10 +17,13 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "app.dumpbox.dumpbox"
-    compileSdk = flutter.compileSdkVersion
+    // The reminder plugin (flutter_local_notifications) and androidx.core 1.19 compile against Android 37.
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // Scheduled notifications use java.time on older Android versions.
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -61,4 +64,8 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
