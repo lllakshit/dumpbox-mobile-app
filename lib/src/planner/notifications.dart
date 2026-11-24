@@ -129,18 +129,36 @@ class PlannerNotifications {
     return parts.join(' · ');
   }
 
-  /// Replaces every scheduled reminder with the ones due in the next two weeks.
+  /// Brings the scheduled reminders in line with the next two weeks, changing only what differs: reminders already
+  /// scheduled (same entry, time and text) are left alone, nothing due within the next minute is cancelled, and
+  /// snoozed reminders are never touched. Safe to call after every change and every sync.
   Future<int> reschedule(Iterable<Entry> entries, PlannerPrefs prefs) async {
     await init();
     final now = DateTime.now().toUtc();
-    final due = remindersBetween(entries, now.add(const Duration(seconds: 5)), now.add(_horizon), allDayTime: prefs.allDayReminderTime).take(_maxScheduled).toList();
-    await _plugin.cancelAllPendingNotifications();
+    // From a minute ago, so a reminder about to fire is still "wanted" and is not cancelled under it.
+    final due = remindersBetween(entries, now.subtract(const Duration(minutes: 1)), now.add(_horizon), allDayTime: prefs.allDayReminderTime).take(_maxScheduled).toList();
+    final wanted = {for (final r in due) _idFor('${r.id}|${r.at.millisecondsSinceEpoch}|${r.entry.title}|${_body(r)}'): r};
+    final pending = await _plugin.pendingNotificationRequests();
+    final have = <int>{};
+    for (final p in pending) {
+      have.add(p.id);
+      if (wanted.containsKey(p.id)) continue;
+      if (p.payload != null && p.payload!.contains('"snooze":true')) continue;
+      if (p.id == 1) continue; // the test notification
+      await _plugin.cancel(id: p.id);
+    }
     final mode = (await _android?.canScheduleExactNotifications() ?? false) ? AndroidScheduleMode.exactAllowWhileIdle : AndroidScheduleMode.inexactAllowWhileIdle;
     var n = 0;
-    for (final r in due) {
+    for (final entry in wanted.entries) {
+      final r = entry.value;
+      if (have.contains(entry.key)) {
+        n++;
+        continue;
+      }
+      if (!r.at.isAfter(now.add(const Duration(seconds: 2)))) continue;
       try {
         await _plugin.zonedSchedule(
-          id: _idFor(r.id),
+          id: entry.key,
           title: r.entry.title,
           body: _body(r),
           scheduledDate: tz.TZDateTime.from(r.at, tz.UTC),
@@ -167,7 +185,7 @@ class PlannerNotifications {
       scheduledDate: tz.TZDateTime.from(at, tz.UTC),
       notificationDetails: _details(e),
       androidScheduleMode: mode,
-      payload: jsonEncode({'id': e.id}),
+      payload: jsonEncode({'id': e.id, 'snooze': true}),
     );
   }
 

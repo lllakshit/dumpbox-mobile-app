@@ -5,6 +5,7 @@ import 'package:dumpbox/src/api.dart';
 import 'package:dumpbox/src/planner/planner_engine.dart';
 import 'package:dumpbox/src/planner/planner_models.dart';
 import 'package:dumpbox/src/planner/recurrence.dart';
+import 'package:dumpbox/src/planner/series.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -83,6 +84,33 @@ void main() {
         'a@2026-12-01T04:20:00.000Z',
       });
       expect(r.length, 3);
+    });
+  });
+
+  group('series edits (same cases as the web app)', () {
+    test('cuts in the entry zone, carries COUNT and skipped dates', () {
+      final e = entry({
+        'start_at': '2026-11-30T15:00:00Z',
+        'time_zone': 'America/New_York',
+        'rrule': 'FREQ=WEEKLY;COUNT=6',
+        'exdates': ['2026-12-07T15:00Z', '2026-12-21T15:00Z'],
+      });
+      final o = occurrences(e, '2026-12-14', '2026-12-15').firstWhere((o) => o.start.isAtSameMomentAs(DateTime.utc(2026, 12, 14, 15)));
+      final d = occurrenceDate(e, key: o.key, start: o.start);
+      expect(d, '2026-12-14');
+      final s = splitSeries(e, d, e.rrule);
+      expect(s.oldRule, 'FREQ=WEEKLY;UNTIL=20261213');
+      expect(s.newRule, 'FREQ=WEEKLY;COUNT=4');
+      expect(s.oldExdates, ['2026-12-07T15:00Z']);
+      expect(s.newExdates, ['2026-12-21T15:00Z']);
+      expect(splitSeries(e, '2026-11-30', e.rrule).oldRule, isNull);
+    });
+    test('shifts skipped dates', () {
+      expect(shiftExdates(['2026-12-07T15:00Z', '2026-12-10'], by: const Duration(hours: 1), days: 1), ['2026-12-07T16:00Z', '2026-12-11']);
+    });
+    test('a daily series from 2008 still shows in 2026', () {
+      final e = entry({'all_day': true, 'start_date': '2008-01-01', 'rrule': 'FREQ=DAILY'});
+      expect(occurrences(e, '2026-12-01', '2026-12-03').map((o) => o.startDate), ['2026-12-01', '2026-12-02', '2026-12-03']);
     });
   });
 

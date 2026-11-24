@@ -254,13 +254,21 @@ List<String> _monthDates(int y, int m, Rule r, String start) {
   return out.toList()..sort();
 }
 
-/// Occurrence dates from [start] (always the first) up to [to] inclusive.
-List<String> ruleDates(String start, Rule r, String to, [int limit = 5000]) {
-  final out = <String>[start];
+/// Occurrence dates from [start] (always the first) up to [to] inclusive. Dates before [from] are counted (for
+/// COUNT) but not returned, so a series started years ago stays cheap to show. At most [limit] dates.
+List<String> ruleDates(String start, Rule r, String to, [int limit = 5000, String? from]) {
+  final out = <String>[];
   final last = r.until != null && r.until!.compareTo(to) < 0 ? r.until! : to;
-  final max = r.count != null && r.count! < limit ? r.count! : limit;
+  final maxCount = r.count ?? 1 << 30;
+  var seen = 0;
+  void take(String d) {
+    seen++;
+    if ((from == null || d.compareTo(from) >= 0) && out.length < limit) out.add(d);
+  }
+
+  if (start.compareTo(last) <= 0) take(start);
   final sp = parseDate(start);
-  for (var k = 0; k < 20000 && out.length < max; k++) {
+  for (var k = 0; k < 200000 && seen < maxCount && out.length < limit; k++) {
     String periodStart;
     List<String> dates;
     switch (r.freq) {
@@ -290,7 +298,7 @@ List<String> ruleDates(String start, Rule r, String to, [int limit = 5000]) {
     }
     if (periodStart.compareTo(last) > 0) break;
     for (final d in dates) {
-      if (d.compareTo(start) > 0 && d.compareTo(last) <= 0 && out.length < max) out.add(d);
+      if (d.compareTo(start) > 0 && d.compareTo(last) <= 0 && seen < maxCount) take(d);
     }
   }
   return out;
@@ -337,7 +345,7 @@ List<Occurrence> occurrences(Entry e, String from, String to, [int limit = 1000]
     final s = e.startDate;
     if (s == null) return out;
     final span = e.endDate == null ? 0 : diffDays(s, e.endDate!).clamp(0, 3650);
-    for (final d in rule == null ? [s] : ruleDates(s, rule, to)) {
+    for (final d in rule == null ? [s] : ruleDates(s, rule, to, limit + 5, addDays(from, -span))) {
       final end = addDays(d, span);
       if (end.compareTo(from) < 0) continue;
       if (d.compareTo(to) > 0) break;
@@ -361,7 +369,8 @@ List<Occurrence> occurrences(Entry e, String from, String to, [int limit = 1000]
   final loc = location(e.timeZone) ?? localZone;
   final dur = e.endAt == null ? Duration.zero : e.endAt!.difference(startAt);
   final w = toWall(startAt, loc);
-  for (final d in rule == null ? [w.date] : ruleDates(w.date, rule, addDays(to, 1))) {
+  final spanDays = dur.inDays + 2;
+  for (final d in rule == null ? [w.date] : ruleDates(w.date, rule, addDays(to, 1), limit + 5, addDays(from, -spanDays))) {
     final s = rule == null ? startAt : fromWall(d, w.time, loc);
     final en = s.add(dur.isNegative ? Duration.zero : dur);
     final sw = toWall(s);

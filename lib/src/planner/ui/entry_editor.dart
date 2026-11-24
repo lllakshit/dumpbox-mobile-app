@@ -4,18 +4,22 @@ import 'package:intl/intl.dart';
 import '../planner_engine.dart';
 import '../planner_models.dart';
 import '../recurrence.dart';
+import '../series.dart';
 import 'planner_widgets.dart';
 
 /// Which occurrence of a repeating event was opened.
 class OccurrenceRef {
-  const OccurrenceRef({required this.key, required this.startDate, required this.endDate, this.startTime, this.endTime});
+  const OccurrenceRef({required this.key, required this.allDay, required this.start, required this.end, required this.startDate, required this.endDate});
   final String key;
+  final bool allDay;
+
+  /// Instants of this occurrence (shown and cut in the entry's own zone).
+  final DateTime start;
+  final DateTime end;
   final String startDate;
   final String endDate;
-  final String? startTime;
-  final String? endTime;
 
-  factory OccurrenceRef.of(Occurrence o) => OccurrenceRef(key: o.key, startDate: o.startDate, endDate: o.endDate, startTime: o.startTime, endTime: o.endTime);
+  factory OccurrenceRef.of(Occurrence o) => OccurrenceRef(key: o.key, allDay: o.allDay, start: o.start, end: o.end, startDate: o.startDate, endDate: o.endDate);
 }
 
 /// Opens the editor. [entry] edits an existing one; otherwise [draft] (API-shaped fields) prefills a new one.
@@ -92,10 +96,17 @@ class _EntryEditorState extends State<EntryEditor> {
     }
     final o = widget.occurrence;
     if (o != null) {
-      _startDate = o.startDate;
-      _endDate = o.endDate;
-      if (o.startTime != null) _startTime = o.startTime!;
-      if (o.endTime != null) _endTime = o.endTime!;
+      if (o.allDay) {
+        _startDate = o.startDate;
+        _endDate = o.endDate;
+      } else {
+        final s = toWall(o.start, loc);
+        final en = toWall(o.end, loc);
+        _startDate = s.date;
+        _startTime = s.time;
+        _endDate = en.date;
+        _endTime = en.time;
+      }
     }
     if (_endDate.compareTo(_startDate) < 0) _endDate = _startDate;
     _title.text = e?.title ?? '';
@@ -185,20 +196,22 @@ class _EntryEditorState extends State<EntryEditor> {
       final patch = {...body, if (_kind == 'task') 'completed': _done};
       final o = widget.occurrence;
       if (_repeating && o != null) {
-        // "All events": shift the whole series by how far this occurrence moved.
+        // "All events": shift the whole series (and its skipped dates) by how far this occurrence moved.
         final loc = location(_tz) ?? localZone;
         if (_allDay && e.startDate != null) {
-          final shift = diffDays(o.startDate, _startDate);
+          final shift = diffDays(occurrenceDate(e, key: o.key, start: o.start), _startDate);
           final span = diffDays(_startDate, _endDate).clamp(0, 3650);
           final s = addDays(e.startDate!, shift);
           patch['start_date'] = s;
           patch['end_date'] = span > 0 ? addDays(s, span) : null;
-        } else if (!_allDay && e.startAt != null && o.startTime != null) {
-          final shift = fromWall(_startDate, _startTime, loc).difference(fromWall(o.startDate, o.startTime!, loc));
+          patch['exdates'] = shiftExdates(e.exdates, days: shift);
+        } else if (!_allDay && e.startAt != null && !o.allDay) {
+          final shift = fromWall(_startDate, _startTime, loc).difference(o.start);
           final len = fromWall(_endDate, _endTime, loc).difference(fromWall(_startDate, _startTime, loc));
           final s = e.startAt!.add(shift);
           patch['start_at'] = s.toIso8601String();
           patch['end_at'] = _kind == 'event' ? s.add(len.isNegative ? Duration.zero : len).toIso8601String() : null;
+          patch['exdates'] = shiftExdates(e.exdates, by: shift);
         }
       }
       await engine.update(e, patch);
@@ -206,15 +219,13 @@ class _EntryEditorState extends State<EntryEditor> {
       await engine.create({...body, 'rrule': null});
       await engine.update(e, {'exdates': {...e.exdates, widget.occurrence!.key}.toList()});
     } else {
-      final rule = parseRule(e.rrule);
-      final occDate = widget.occurrence!.startDate;
-      final nr = parseRule(_rrule);
-      await engine.create({...body, 'rrule': nr == null ? null : (rule?.count != null ? nr.copyWith(clearCount: true).toString() : nr.toString())});
-      final first = e.startDate ?? (e.startAt != null ? toWall(e.startAt!, location(_tz)).date : occDate);
-      if (addDays(occDate, -1).compareTo(first) < 0) {
+      final o = widget.occurrence!;
+      final split = splitSeries(e, occurrenceDate(e, key: o.key, start: o.start), _rrule);
+      await engine.create({...body, 'rrule': split.newRule, 'exdates': split.newExdates});
+      if (split.oldRule == null) {
         await engine.remove(e);
       } else {
-        await engine.update(e, {'rrule': endRuleBefore(e.rrule!, occDate)});
+        await engine.update(e, {'rrule': split.oldRule, 'exdates': split.oldExdates});
       }
     }
     if (mounted) Navigator.pop(context);
@@ -236,12 +247,12 @@ class _EntryEditorState extends State<EntryEditor> {
     } else if (mode == 'this') {
       await engine.update(e, {'exdates': {...e.exdates, widget.occurrence!.key}.toList()});
     } else {
-      final occDate = widget.occurrence!.startDate;
-      final first = e.startDate ?? (e.startAt != null ? toWall(e.startAt!, location(_tz)).date : occDate);
-      if (addDays(occDate, -1).compareTo(first) < 0) {
+      final o = widget.occurrence!;
+      final split = splitSeries(e, occurrenceDate(e, key: o.key, start: o.start), null);
+      if (split.oldRule == null) {
         await engine.remove(e);
       } else {
-        await engine.update(e, {'rrule': endRuleBefore(e.rrule!, occDate)});
+        await engine.update(e, {'rrule': split.oldRule, 'exdates': split.oldExdates});
       }
     }
     if (mounted) Navigator.pop(context);

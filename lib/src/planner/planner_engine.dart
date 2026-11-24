@@ -181,7 +181,8 @@ class PlannerEngine extends ChangeNotifier {
 
   /// Moves to the bin (with subtasks). Entries never sent to the server are simply dropped.
   Future<void> remove(Entry e) async {
-    if (e.version == 0 && (await store.ops()).any((o) => o['entry_id'] == e.id && o['method'] == 'POST')) {
+    // Never confirmed by the server (still queued, or refused): just drop it here.
+    if (e.version == 0) {
       _entries.remove(e.id);
       await store.deleteEntry(e.id);
       await store.removeOpsFor(e.id);
@@ -313,15 +314,26 @@ class PlannerEngine extends ChangeNotifier {
           await store.markFailed(seq, e.message);
           return false;
         }
-        // Refused for good: drop it and show why. A refused create removes the entry here too.
+        // Refused for good: drop the change and show why on the entry. A refused new entry stays on the phone
+        // (marked) so nothing typed is lost; a refused edit is replaced by the server's copy.
         await store.removeOp(seq);
         _failed[id] = e.message;
+        lastError = e.message;
         if (op['method'] == 'POST') {
           await store.removeOpsFor(id);
-          _entries.remove(id);
-          await store.deleteEntry(id);
+        } else {
+          try {
+            final d = await api.request('GET', '/v1/planner/entries/$id');
+            final fresh = Entry.fromJson(d['entry'] as Map<String, dynamic>);
+            _entries[id] = fresh;
+            await store.putEntries([fresh]);
+          } on ApiException catch (g) {
+            if (g.status == 404) {
+              _entries.remove(id);
+              await store.deleteEntry(id);
+            }
+          }
         }
-        lastError = e.message;
       }
     }
     return true;
@@ -330,14 +342,18 @@ class PlannerEngine extends ChangeNotifier {
   Future<void> _pull() async {
     var since = await store.meta('since');
     final pending = (await store.ops()).map((o) => o['entry_id'] as String).toSet();
+    // After a reset (away too long), rows the full resync does not bring back were removed on the server.
+    Set<String>? resyncSeen;
     for (var page = 0; page < 100; page++) {
       final q = since == null ? '' : '?since=${Uri.encodeQueryComponent(since)}';
       final d = await api.request('GET', '/v1/planner/changes$q');
       if (d['reset'] == true) {
         since = null;
+        resyncSeen = {};
         await store.setMeta('since', null);
         continue;
       }
+      resyncSeen?.addAll(((d['entries'] as List?) ?? const []).map((x) => (x as Map<String, dynamic>)['id'] as String));
       final incoming = ((d['entries'] as List?) ?? const []).map((x) => Entry.fromJson(x as Map<String, dynamic>));
       final save = <Entry>[];
       for (final e in incoming) {
@@ -353,6 +369,14 @@ class PlannerEngine extends ChangeNotifier {
       since = d['next_since'] as String?;
       await store.setMeta('since', since);
       if (d['has_more'] != true) break;
+    }
+    if (resyncSeen != null) {
+      for (final id in _entries.keys.toList()) {
+        if (!resyncSeen.contains(id) && !pending.contains(id) && (_entries[id]?.version ?? 0) > 0) {
+          _entries.remove(id);
+          await store.deleteEntry(id);
+        }
+      }
     }
     // Preferences live in the profile.
     try {
@@ -373,10 +397,12 @@ class PlannerEngine extends ChangeNotifier {
     var url = await store.meta('feed_url');
     if (url != null && check != null && !await check(url)) url = null;
     if (url == null) {
-      final d = await api.request('POST', '/v1/planner/feed-token');
+      // This phone's own address: other devices and calendar apps keep theirs.
+      final d = await api.request('POST', '/v1/planner/feed-token', body: {'label': 'Android phone'});
       url = d['json_url'] as String?;
       if (url == null) return;
       await store.setMeta('feed_url', url);
+      await store.setMeta('feed_id', d['id'] as String?);
     }
     feedUrl = url;
     onFeedReady?.call(url, dbPath);
@@ -385,8 +411,17 @@ class PlannerEngine extends ChangeNotifier {
   String? feedUrl;
   void Function(String url, String dbPath)? onFeedReady;
 
+  /// Sign-out: turns off this phone's calendar address on the server (best effort), then forgets everything.
   Future<void> wipe() async {
     _debounce?.cancel();
+    final feedId = await store.meta('feed_id');
+    if (feedId != null) {
+      try {
+        await api.request('DELETE', '/v1/planner/feed-token?id=$feedId');
+      } on ApiException {
+        // offline: the address stays until turned off on the web
+      }
+    }
     await store.clear();
     _entries.clear();
     _lists = [];
