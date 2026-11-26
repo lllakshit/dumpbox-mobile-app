@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../email/email_models.dart';
+import '../email/ui/email_screen.dart';
 import '../models.dart';
 import '../planner/notifications.dart';
 import '../planner/planner_engine.dart';
@@ -13,11 +15,12 @@ import 'feed_screen.dart';
 import 'search_screen.dart';
 import 'settings_screen.dart';
 
-/// Bottom navigation: Feed, Planner (calendar + tasks), Search, Browse (smart views, tags, collections), Settings.
+/// Bottom navigation: Feed, Planner (calendar + tasks), Email, Search, Browse (smart views, tags, collections), Settings.
 class HomeShell extends StatefulWidget {
-  const HomeShell({super.key, required this.engine, required this.planner, required this.email, required this.onSignOut});
+  const HomeShell({super.key, required this.engine, required this.planner, required this.emailHub, required this.email, required this.onSignOut});
   final SyncEngine engine;
   final PlannerEngine planner;
+  final EmailHub emailHub;
   final String email;
   final Future<void> Function() onSignOut;
 
@@ -76,6 +79,7 @@ class _HomeShellState extends State<HomeShell> {
     final pages = [
       FeedScreen(engine: widget.engine, view: const AllView(), isRoot: true),
       PlannerScreen(engine: widget.planner),
+      EmailScreen(api: widget.engine.api, planner: widget.planner, hub: widget.emailHub, active: _tab == 2),
       SearchScreen(engine: widget.engine),
       BrowseScreen(engine: widget.engine),
       SettingsScreen(engine: widget.engine, planner: widget.planner, email: widget.email, onSignOut: widget.onSignOut),
@@ -90,6 +94,7 @@ class _HomeShellState extends State<HomeShell> {
           destinations: const [
             NavigationDestination(icon: Icon(Icons.chat_bubble_outline), selectedIcon: Icon(Icons.chat_bubble), label: 'Feed'),
             NavigationDestination(icon: Icon(Icons.calendar_month_outlined), selectedIcon: Icon(Icons.calendar_month), label: 'Planner'),
+            NavigationDestination(icon: Icon(Icons.mail_outline), selectedIcon: Icon(Icons.mail), label: 'Email'),
             NavigationDestination(icon: Icon(Icons.search), label: 'Search'),
             NavigationDestination(icon: Icon(Icons.folder_outlined), selectedIcon: Icon(Icons.folder), label: 'Browse'),
             NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: 'Settings'),
