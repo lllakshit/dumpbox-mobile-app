@@ -11,6 +11,7 @@ import 'package:http/http.dart' as http;
 
 import '../api.dart';
 import '../config.dart';
+import '../email/email_models.dart';
 import '../local_store.dart';
 import '../planner/background.dart';
 import '../planner/notifications.dart';
@@ -36,6 +37,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   Timer? _periodic;
   SyncEngine? _engine;
   PlannerEngine? _planner;
+  // Email has no local copy: screens read the API and refresh when this fires (live event or app resumed).
+  final _emailHub = EmailHub();
   Timer? _rescheduleTimer;
   String? _userId;
 
@@ -109,6 +112,13 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
             table: 'planner_entries',
             filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'user_id', value: uid),
             callback: (_) => planner.nudge(),
+          )
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'email_threads',
+            filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'user_id', value: uid),
+            callback: (_) => _emailHub.changed(),
           )
           .subscribe();
     }
@@ -184,6 +194,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       _engine?.nudge();
       _planner?.nudge();
+      _emailHub.changed();
     }
   }
 
@@ -192,6 +203,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _authSub?.cancel();
     _stopEngine();
+    _emailHub.dispose();
     super.dispose();
   }
 
@@ -201,7 +213,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     final engine = _engine;
     final planner = _planner;
     if (engine == null || planner == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    return HomeShell(engine: engine, planner: planner, email: _auth.currentUser?.email ?? '', onSignOut: signOut);
+    return HomeShell(engine: engine, planner: planner, emailHub: _emailHub, email: _auth.currentUser?.email ?? '', onSignOut: signOut);
   }
 }
 
