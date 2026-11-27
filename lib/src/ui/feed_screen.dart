@@ -10,6 +10,7 @@ import 'package:mime/mime.dart';
 import '../models.dart';
 import '../sync_engine.dart';
 import 'item_actions.dart';
+import 'image_album.dart';
 import 'item_card.dart';
 
 /// Chat-style list of items for one view, newest at the bottom, with the capture bar.
@@ -66,28 +67,38 @@ class FeedScreen extends StatelessWidget {
                     ),
                   );
                 }
+                final rows = groupIntoAlbums(items);
                 return RefreshIndicator(
                   onRefresh: engine.sync,
                   child: ListView.builder(
                     reverse: true,
                     padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-                    itemCount: items.length,
+                    itemCount: rows.length,
                     itemBuilder: (context, i) {
-                      final item = items[i];
-                      final older = i + 1 < items.length ? items[i + 1] : null;
-                      final newDay = older == null || !_sameDay(older.createdAt, item.createdAt);
+                      final row = rows[i];
+                      final item = row.first;
+                      final older = i + 1 < rows.length ? rows[i + 1].first : null;
+                      final newDay = older == null || !_sameDay(older.createdAt, row.last.createdAt);
+                      final failure = row.map((x) => engine.failureFor(x.id)).firstWhere((e) => e != null, orElse: () => null);
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          if (newDay) _DaySeparator(date: item.createdAt),
+                          if (newDay) _DaySeparator(date: row.last.createdAt),
                           Padding(
                             padding: const EdgeInsets.only(bottom: 10),
-                            child: ItemCard(
-                              item: item,
-                              pending: engine.isPending(item.id),
-                              error: engine.failureFor(item.id),
-                              onTap: () => showItemActions(context, engine, item),
-                            ),
+                            child: row.length > 1
+                                ? AlbumCard(
+                                    newestFirst: row,
+                                    pending: row.any((x) => engine.isPending(x.id)),
+                                    error: failure,
+                                    onItemActions: (x) => showItemActions(context, engine, x),
+                                  )
+                                : ItemCard(
+                                    item: item,
+                                    pending: engine.isPending(item.id),
+                                    error: engine.failureFor(item.id),
+                                    onTap: () => showItemActions(context, engine, item),
+                                  ),
                           ),
                         ],
                       );
