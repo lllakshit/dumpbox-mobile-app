@@ -1,11 +1,10 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../models.dart';
 import 'file_urls.dart';
+import 'image_viewer.dart';
 
 /// One item as a chat bubble on the right. Tap for actions.
 class ItemCard extends StatelessWidget {
@@ -149,7 +148,7 @@ class _Body extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (item.body != null && item.body!.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom: 6), child: Text(item.body!)),
-            for (final f in item.files) _FileView(file: f),
+            for (final f in item.files) _FileView(file: f, siblings: item.files),
             if (item.files.isEmpty) Text('Uploading…', style: TextStyle(color: c.onSurfaceVariant)),
           ],
         );
@@ -158,28 +157,31 @@ class _Body extends StatelessWidget {
 }
 
 class _FileView extends StatelessWidget {
-  const _FileView({required this.file});
+  const _FileView({required this.file, required this.siblings});
   final FileMeta file;
+
+  /// Every file on the same item, so the viewer can swipe through its images.
+  final List<FileMeta> siblings;
 
   @override
   Widget build(BuildContext context) {
     final c = Theme.of(context).colorScheme;
     if (file.isImage) {
-      final ratio = (file.width != null && file.height != null && file.height! > 0) ? file.width! / file.height! : 4 / 3;
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxHeight: 320),
-          child: AspectRatio(
-            aspectRatio: ratio,
-            child: file.localPath != null
-                ? Image.file(File(file.localPath!), fit: BoxFit.cover)
-                : FutureBuilder(
-                    future: FileUrls.get(file.id),
-                    builder: (context, snap) => snap.hasData
-                        ? Image.network(snap.data!.view, fit: BoxFit.cover, errorBuilder: (_, _, _) => const Icon(Icons.broken_image_outlined))
-                        : Container(color: c.surfaceContainerHighest),
-                  ),
+      // Whole image, never cropped: the box takes the image's own shape. Tap opens it full screen.
+      final known = file.width != null && file.height != null && file.width! > 0 && file.height! > 0;
+      final images = siblings.where((f) => f.isImage).toList();
+      final picture = FileImageView(file: file, fit: BoxFit.contain);
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: GestureDetector(
+          onTap: () => showImageViewer(context, images, initial: images.indexOf(file).clamp(0, images.length - 1)),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              color: c.surfaceContainerHighest,
+              constraints: const BoxConstraints(maxHeight: 360),
+              child: known ? AspectRatio(aspectRatio: file.width! / file.height!, child: picture) : picture,
+            ),
           ),
         ),
       );
